@@ -2,7 +2,7 @@
 
 A standalone Tampermonkey userscript for ChatGPT, including Work mode.
 
-Current version: **1.1.10**.
+Current version: **1.1.11**.
 
 ## Features
 
@@ -32,22 +32,15 @@ The userscript's `@updateURL` and `@downloadURL` point to the script on this
 repository's `master` branch. Tampermonkey can check its `@version` and download
 newer versions according to the script manager's update settings.
 
-Install or reinstall version **1.1.10** once to use the GitHub-domain Raw URLs.
-Future releases must increase `@version` for update checks to find them.
+If your installed copy still disables updates in its metadata, install the current
+version once using the [Raw install/update link](https://github.com/GoldRobot/chagpt_better_ui/raw/refs/heads/master/chatgpt-better-ui.user.js).
+Tampermonkey should offer installation or an update when it can access the file.
+Future releases increase `@version` so the manager can detect them.
 
-This repository is private. Tampermonkey must be able to authenticate when reading
-the GitHub raw URLs; the GitHub connection used to maintain this repository does
-not authenticate Tampermonkey. If those URLs are inaccessible to the script
-manager, automatic installation and updates will fail. Manual copying from GitHub
-remains available. No access tokens are included in the update URLs.
-
-For a direct installation, sign into GitHub in Firefox, then open the
-[Raw install/update link](https://github.com/GoldRobot/chagpt_better_ui/raw/refs/heads/master/chatgpt-better-ui.user.js).
-Tampermonkey may offer to install or update the script. This GitHub-domain URL
-allows GitHub to authenticate the request before redirecting to the file, rather
-than starting with an unauthenticated `raw.githubusercontent.com` URL. Background
-update access still needs testing with your browser's cookie/container setup.
-If installation is unavailable, use the copy-and-paste steps above.
+The repository is public, so downloading updates requires no GitHub login or
+access token. Enable update checks and automatic installation in Tampermonkey
+according to your preferred schedule. If you already have version **1.1.10**,
+use **Check for updates** to test detection of **1.1.11**.
 
 ## Usage data
 
