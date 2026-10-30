@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         ChatGPT Enter Fix - Regular and Work
 // @namespace    local.chatgpt.enter-fix
-// @version      1.1.8
+// @version      1.1.9
 // @description  Enter adds a newline; Ctrl+Enter sends. Includes live Work session and weekly usage gauges.
 // @match        https://chatgpt.com/*
 // @run-at       document-start
 // @grant        none
-// @updateURL    none
-// @downloadURL  none
+// @updateURL    https://raw.githubusercontent.com/GoldRobot/chagpt_better_ui/master/chatgpt-better-ui.user.js
+// @downloadURL  https://raw.githubusercontent.com/GoldRobot/chagpt_better_ui/master/chatgpt-better-ui.user.js
 // @license      MIT
 // ==/UserScript==
 
