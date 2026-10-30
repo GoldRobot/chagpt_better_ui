@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Enter Fix - Regular and Work
 // @namespace    local.chatgpt.enter-fix
-// @version      1.1.10
+// @version      1.1.11
 // @description  Enter adds a newline; Ctrl+Enter sends. Includes live Work session and weekly usage gauges.
 // @match        https://chatgpt.com/*
 // @run-at       document-start
