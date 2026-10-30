@@ -2,7 +2,7 @@
 
 A standalone Tampermonkey userscript for ChatGPT, including Work mode.
 
-Current version: **1.1.8**.
+Current version: **1.1.9**.
 
 ## Features
 
@@ -26,9 +26,24 @@ Current version: **1.1.8**.
 No build process, npm installation, or unsigned Firefox add-on settings are needed.
 Tampermonkey retains the script across browser restarts.
 
-To update, replace the existing Tampermonkey script with the current file contents,
-save, and reload ChatGPT. Automatic script downloads and updates are disabled in
-the userscript metadata.
+## Automatic updates
+
+The userscript's `@updateURL` and `@downloadURL` point to the script on this
+repository's `master` branch. Tampermonkey can check its `@version` and download
+newer versions according to the script manager's update settings.
+
+Install or paste version **1.1.9** once to replace the older metadata that disabled
+updates. Future releases must increase `@version` for update checks to find them.
+
+This repository is private. Tampermonkey must be able to authenticate when reading
+the GitHub raw URLs; the GitHub connection used to maintain this repository does
+not authenticate Tampermonkey. If those URLs are inaccessible to the script
+manager, automatic installation and updates will fail. Manual copying from GitHub
+remains available. No access tokens are included in the update URLs.
+
+For a direct installation, open the script's **Raw** link while authenticated to
+GitHub. Tampermonkey may offer to install it if the file is accessible to the
+manager. Otherwise, use the copy-and-paste installation steps above.
 
 ## Usage data
 
