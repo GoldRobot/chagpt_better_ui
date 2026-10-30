@@ -2,7 +2,7 @@
 
 A standalone Tampermonkey userscript for ChatGPT, including Work mode.
 
-Current version: **1.1.12**.
+Current version: **1.1.13**.
 
 ## Features
 
