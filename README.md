@@ -2,7 +2,7 @@
 
 A standalone Tampermonkey userscript for ChatGPT, including Work mode.
 
-Current version: **1.1.11**.
+Current version: **1.1.12**.
 
 ## Features
 
@@ -32,15 +32,21 @@ The userscript's `@updateURL` and `@downloadURL` point to the script on this
 repository's `master` branch. Tampermonkey can check its `@version` and download
 newer versions according to the script manager's update settings.
 
-If your installed copy still disables updates in its metadata, install the current
-version once using the [Raw install/update link](https://github.com/GoldRobot/chagpt_better_ui/raw/refs/heads/master/chatgpt-better-ui.user.js).
-Tampermonkey should offer installation or an update when it can access the file.
-Future releases increase `@version` so the manager can detect them.
+Install or reinstall once from the [direct Raw install/update link](https://raw.githubusercontent.com/GoldRobot/chagpt_better_ui/master/chatgpt-better-ui.user.js)
+so Tampermonkey records the current source and metadata. The script uses the same
+stable `raw.githubusercontent.com/OWNER/REPOSITORY/BRANCH/FILE.user.js` URL for
+both update checks and downloads, without a GitHub-domain redirect.
 
-The repository is public, so downloading updates requires no GitHub login or
-access token. Enable update checks and automatic installation in Tampermonkey
-according to your preferred schedule. If you already have version **1.1.10**,
-use **Check for updates** to test detection of **1.1.11**.
+The repository is public; no GitHub login or access token is required.
+Future releases must increase `@version`. Enable update checks and automatic
+installation in Tampermonkey according to your preferred schedule.
+
+Changing this repository does not change an installed copy's saved update URL
+until that copy is updated or reinstalled. If updates still fail after reinstalling,
+check the script's update/download URL overrides and whether update checks and
+automatic installation are enabled. A locally modified script may also require
+confirming a manual update. Raw responses can be cached, so an immediate check
+can briefly return an older version.
 
 ## Usage data
 
