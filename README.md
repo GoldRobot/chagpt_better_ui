@@ -2,13 +2,14 @@
 
 A standalone Tampermonkey userscript for ChatGPT, including Work mode.
 
-Current version: **1.1.13**.
+Current version: **1.1.14**.
 
 ## Features
 
 - **Enter** inserts a newline; **Ctrl+Enter** or **Cmd+Enter** sends.
 - **Shift+Enter** keeps its normal newline behavior.
 - Compact session and weekly allowance gauges next to Work-style composers.
+- Gauges follow the visible composer when switching chats, including when inactive chats remain mounted but hidden with CSS.
 - Each gauge fills across its entire frame according to the percentage remaining.
 - Reset countdowns appear in the headings, such as `Session · 2h 20m`.
 - The whole gauge opens the usage dashboard when clicked.
