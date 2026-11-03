@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Enter Fix - Regular and Work
 // @namespace    local.chatgpt.enter-fix
-// @version      1.1.14
+// @version      1.1.15
 // @description  Enter adds a newline; Ctrl+Enter sends. Includes live Work session and weekly usage gauges.
 // @match        https://chatgpt.com/*
 // @run-at       document-start
@@ -123,6 +123,18 @@
         };
     }
 
+    function normalizeLimits(rateLimit, receivedAt) {
+        const windows = { session: null, week: null };
+        for (const value of [rateLimit.primary_window, rateLimit.secondary_window]) {
+            const normalized = normalizeWindow(value, receivedAt);
+            if (!normalized) {continue;}
+            // Identify the allowance by duration, not position or subscription name.
+            if (normalized.seconds === 604800) {windows.week = normalized;}
+            else if (normalized.seconds === 18000) {windows.session = normalized;}
+        }
+        return windows;
+    }
+
     function receive(data, requestAccount = '', requestGeneration = generation) {
         if (requestGeneration !== generation || !data || typeof data.rate_limit !== 'object' || !data.rate_limit) {return false;}
         const responseAccount = typeof data.account_id === 'string' ? data.account_id : '';
@@ -130,10 +142,9 @@
         if (requestAccount && account && requestAccount !== account) {return false;}
         if (!account && responseAccount) {account = responseAccount;}
         const receivedAt = Date.now();
-        usage = {
-            session: normalizeWindow(data.rate_limit.primary_window, receivedAt),
-            week: normalizeWindow(data.rate_limit.secondary_window, receivedAt)
-        };
+        const windows = normalizeLimits(data.rate_limit, receivedAt);
+        if (!windows.session && !windows.week) {return false;}
+        usage = windows;
         updatedAt = receivedAt;
         notice = '';
         render();
@@ -207,6 +218,7 @@
                 color:inherit;text-decoration:none;cursor:pointer;
                 border:1px solid color-mix(in srgb,currentColor 16%,transparent);
                 background:Canvas}
+            .gauge[hidden]{display:none}
             .heading{position:relative;z-index:1;display:flex;justify-content:space-between;gap:12px;align-items:baseline}
             .name{opacity:.7;font-size:11px;white-space:nowrap}.value{font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
             .track{position:absolute;inset:0;z-index:0;pointer-events:none}
@@ -227,6 +239,7 @@
         for (const key of ['session', 'week']) {
             const gauge = shadow.querySelector(`[data-window="${key}"]`);
             const windowData = usage?.[key];
+            gauge.hidden = !windowData;
             const expired = windowData?.resetAt !== null && windowData?.resetAt <= now;
             const known = Boolean(windowData) && !expired;
             const remaining = known ? windowData.remaining : 0;
