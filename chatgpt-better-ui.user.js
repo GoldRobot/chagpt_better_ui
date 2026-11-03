@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Enter Fix - Regular and Work
 // @namespace    local.chatgpt.enter-fix
-// @version      1.1.13
+// @version      1.1.14
 // @description  Enter adds a newline; Ctrl+Enter sends. Includes live Work session and weekly usage gauges.
 // @match        https://chatgpt.com/*
 // @run-at       document-start
@@ -294,9 +294,18 @@
         return pending;
     }
 
+    function isVisibleEditor(node) {
+        if (!node.isConnected || node.closest('[aria-hidden="true"], [hidden], [inert]')) {return false;}
+        // Work keeps inactive chats mounted under display:none containers.
+        // Layout rectangles account for CSS hiding anywhere in the ancestor chain.
+        if (!node.getClientRects().length) {return false;}
+        const style = window.getComputedStyle(node);
+        return style.visibility !== 'hidden' && style.visibility !== 'collapse';
+    }
+
     function mount() {
         scheduleId = null;
-        const editor = Array.from(document.querySelectorAll(workSelector)).find(node => !node.closest('[aria-hidden="true"], [hidden]'));
+        const editor = Array.from(document.querySelectorAll(workSelector)).find(isVisibleEditor);
         const form = editor?.closest('form');
         if (!form || form.closest('[aria-hidden="true"]')) {
             if (host.isConnected) {host.remove();}
@@ -312,7 +321,7 @@
         if (scheduleId === null) {scheduleId = window.setTimeout(mount, 100);}
     }
     new MutationObserver(scheduleMount).observe(document, {
-        childList: true, subtree: true, attributes: true, attributeFilter: ['aria-hidden', 'hidden']
+        childList: true, subtree: true, attributes: true, attributeFilter: ['aria-hidden', 'hidden', 'inert', 'style', 'class']
     });
     scheduleMount();
     window.setInterval(() => {
