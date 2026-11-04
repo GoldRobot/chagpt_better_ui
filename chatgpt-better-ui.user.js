@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Enter Fix - Regular and Work
 // @namespace    local.chatgpt.enter-fix
-// @version      1.1.16
+// @version      1.1.17
 // @description  Enter adds a newline; Ctrl+Enter sends. Includes Work usage gauges and clearer chat links.
 // @match        https://chatgpt.com/*
 // @run-at       document-start
@@ -370,32 +370,44 @@
             '[data-message-author-role="user"] .whitespace-pre-wrap'
         ];
         const links = ':is(' + roots.join(',') + ') a[href]:not([role="button"])';
+        const inlineMention = '[data-appearance="inline-mention"]';
+        const plainLinks = links + ':not(:has(> ' + inlineMention + '))';
+        const mentionLinks = links + ':has(> ' + inlineMention + ')';
+        const surfaces = ':is(' + plainLinks + ', ' + links + ' > ' + inlineMention + ')';
+        const hoverSurfaces = ':is(' + plainLinks + ':hover, ' + links + ':hover > ' + inlineMention + ')';
+        const focusSurfaces = ':is(' + plainLinks + ':focus-visible, ' + links + ':focus-visible > ' + inlineMention + ')';
         const style = document.createElement('style');
         style.id = 'tm-chat-message-link-styles';
-        // currentColor follows the site's selected appearance, including green links.
+        // Work colors the inner mention, not necessarily its anchor. Paint that
+        // element so currentColor follows the actual text across appearance changes.
         // Keep citation dimensions and all native navigation/preview behavior.
         style.textContent = `
-            ${links} {
+            ${surfaces} {
                 text-decoration-line: underline !important;
                 text-decoration-style: solid !important;
                 text-decoration-thickness: 1.5px !important;
                 text-underline-offset: 3px !important;
-                background-color: color-mix(in srgb, currentColor 10%, transparent) !important;
+                background-color: color-mix(in srgb, currentColor 14%, transparent) !important;
                 border-radius: 4px;
                 box-decoration-break: clone;
                 -webkit-box-decoration-break: clone;
             }
-            ${links}:not([data-testid="chatgpt-citation"]) {
+            ${mentionLinks} {
+                background-color: transparent !important;
+                text-decoration: none !important;
+                padding: 0;
+            }
+            ${surfaces}:not([data-testid="chatgpt-citation"]) {
                 padding: 1px 3px;
             }
             ${links}[data-testid="chatgpt-citation"] {
                 background-color: color-mix(in srgb, currentColor 14%, transparent) !important;
             }
-            ${links}:hover {
+            ${hoverSurfaces} {
                 background-color: color-mix(in srgb, currentColor 20%, transparent) !important;
                 text-decoration-thickness: 2px !important;
             }
-            ${links}:focus-visible {
+            ${focusSurfaces} {
                 background-color: color-mix(in srgb, currentColor 20%, transparent) !important;
                 outline: 2px solid currentColor;
                 outline-offset: 2px;
