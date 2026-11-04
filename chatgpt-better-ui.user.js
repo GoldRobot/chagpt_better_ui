@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT Enter Fix - Regular and Work
 // @namespace    local.chatgpt.enter-fix
-// @version      1.1.17
+// @version      1.1.18
 // @description  Enter adds a newline; Ctrl+Enter sends. Includes Work usage gauges and clearer chat links.
 // @match        https://chatgpt.com/*
 // @run-at       document-start
@@ -20,14 +20,38 @@
     const selector = [
         '#prompt-textarea[contenteditable="true"]',
         '[data-testid="prompt-textarea"][contenteditable="true"]',
-        '[contenteditable="true"][data-lexical-editor="true"]',
         'form[data-chatgpt-composer] [data-composer-markdown][contenteditable="true"][role="textbox"]',
-            'form[data-thread-find-composer] [data-composer-markdown][contenteditable="true"][role="textbox"]'
+        'form[data-thread-find-composer] [data-composer-markdown][contenteditable="true"][role="textbox"]'
     ].join(',');
     let replaying = false;
 
-    function isEditor(event) {
-        return event.target instanceof Element && event.target.matches(selector);
+    function getEditor(event) {
+        if (!(event.target instanceof Element) || event.target.closest('[contenteditable="false"]')) {return null;}
+        return event.target.closest(selector);
+    }
+
+    function visible(node) {
+        if (node.closest('[hidden], [inert], [aria-hidden="true"]') || !node.getClientRects().length) {return false;}
+        const visibility = window.getComputedStyle(node).visibility;
+        return visibility !== 'hidden' && visibility !== 'collapse';
+    }
+
+    function send(editor) {
+        const scope = editor.closest('form, [data-chatgpt-composer], [data-thread-find-composer], [data-testid="composer"]');
+        if (!scope) {return;}
+        // Query each priority separately; a comma-separated query uses DOM order.
+        for (const buttonSelector of [
+            'button[data-testid="send-button"]',
+            'button[aria-label="Send message"]',
+            'button[aria-label="Send"]',
+            'button[type="submit"]'
+        ]) {
+            const button = Array.from(scope.querySelectorAll(buttonSelector)).find(visible);
+            if (!button) {continue;}
+            // A disabled Send button must not fall through to another submit action.
+            if (!button.disabled && button.getAttribute('aria-disabled') !== 'true') {button.click();}
+            return;
+        }
     }
 
     function stop(event) {
@@ -36,25 +60,13 @@
     }
 
     window.addEventListener('keydown', event => {
-        if (replaying || event.isComposing || event.key !== 'Enter' || !isEditor(event)) {return;}
+        if (replaying || event.isComposing || event.keyCode === 229 || event.key !== 'Enter') {return;}
+        const editor = getEditor(event);
+        if (!editor) {return;}
         if (event.altKey || (event.shiftKey && !event.ctrlKey && !event.metaKey)) {return;}
         stop(event);
-        const editor = event.target;
-
         if (event.ctrlKey || event.metaKey) {
-            const form = editor.closest('form');
-            const button = (form || document).querySelector([
-                'button[data-testid="send-button"]',
-                'button[data-testid*="send"]',
-                'button[aria-label="Send message"]',
-                'button[aria-label="Send"]',
-                'button[type="submit"]'
-            ].join(','));
-            if (button) {
-                if (!button.disabled && button.getAttribute('aria-disabled') !== 'true') {button.click();}
-            } else if (form && typeof form.requestSubmit === 'function') {
-                form.requestSubmit();
-            }
+            if (!event.repeat) {send(editor);}
             return;
         }
 
@@ -72,7 +84,7 @@
     }, { capture: true, passive: false });
 
     function blockOtherEnter(event) {
-        if (replaying || event.isComposing || event.key !== 'Enter' || !isEditor(event)) {return;}
+        if (replaying || event.isComposing || event.keyCode === 229 || event.key !== 'Enter' || !getEditor(event)) {return;}
         if (event.altKey || (event.shiftKey && !event.ctrlKey && !event.metaKey)) {return;}
         stop(event);
     }
@@ -100,55 +112,125 @@
     const sessionHeaders = new Headers();
     let account = '';
     let generation = 0;
-    let headersRevision = 0;
     let usage = null;
-    let updatedAt = 0;
-    let lastAttempt = 0;
-    let pending = null;
-    let activeController = null;
+    let requestSerial = 0;
+    let settledSerial = 0;
+    let activeRequest = null;
+    const observedRequests = new Map();
+    let nextPollAt = 0;
+    let pollTimer = null;
+    let failureCount = 0;
+    let failureStatus = 0;
     let notice = 'Connecting…';
     let scheduleId = null;
-    let expiryAttempt = 0;
+    let activeEditor = null;
+    const editors = new Set();
+    const pollInterval = 60000;
+    const requestTimeout = 15000;
+    const labels = { session: 'Session', week: 'Weekly' };
 
     function normalizeWindow(value, receivedAt) {
-        if (!value || typeof value.used_percent !== 'number' || !Number.isFinite(value.used_percent)) {return null;}
+        if (!value || typeof value.used_percent !== 'number' || !Number.isFinite(value.used_percent)
+            || value.used_percent < 0 || value.used_percent > 100) {return null;}
         const resetAt = typeof value.reset_at === 'number' && Number.isFinite(value.reset_at)
             ? value.reset_at * 1000
             : typeof value.reset_after_seconds === 'number' && Number.isFinite(value.reset_after_seconds)
                 ? receivedAt + Math.max(0, value.reset_after_seconds) * 1000 : null;
         return {
             remaining: Math.max(0, Math.min(100, 100 - value.used_percent)),
-            seconds: value.limit_window_seconds,
-            resetAt
+            resetAt,
+            receivedAt
         };
     }
 
     function normalizeLimits(rateLimit, receivedAt) {
         const windows = { session: null, week: null };
+        const issues = new Set();
+        const seen = new Set();
+        let unclassified = false;
         for (const value of [rateLimit.primary_window, rateLimit.secondary_window]) {
-            const normalized = normalizeWindow(value, receivedAt);
-            if (!normalized) {continue;}
-            // Identify the allowance by duration, not position or subscription name.
-            if (normalized.seconds === 604800) {windows.week = normalized;}
-            else if (normalized.seconds === 18000) {windows.session = normalized;}
+            // Only an explicit null means the account has no such window.
+            if (value === null) {continue;}
+            const seconds = value?.limit_window_seconds;
+            const key = seconds === 18000 ? 'session' : seconds === 604800 ? 'week' : null;
+            if (!key) {
+                issues.add(typeof seconds === 'number' ? 'Unsupported usage window' : 'Usage format unavailable');
+                unclassified = true;
+                continue;
+            }
+            const normalized = seen.has(key) ? null : normalizeWindow(value, receivedAt);
+            seen.add(key);
+            if (!normalized) {issues.add(`${labels[key]} unavailable`);}
+            // Keep an unreadable known window visible as an em dash.
+            windows[key] = normalized || { remaining: null, resetAt: null, receivedAt: 0 };
         }
-        return windows;
+        if (unclassified) {
+            // An unknown record is not evidence that a previous allowance vanished.
+            for (const key of Object.keys(windows)) {
+                if (!seen.has(key) && usage?.[key]) {
+                    windows[key] = { remaining: null, resetAt: null, receivedAt: 0 };
+                }
+            }
+        }
+        return { windows, issues: Array.from(issues) };
     }
 
-    function receive(data, requestAccount = '', requestGeneration = generation) {
-        if (requestGeneration !== generation || !data || typeof data.rate_limit !== 'object' || !data.rate_limit) {return false;}
-        const responseAccount = typeof data.account_id === 'string' ? data.account_id : '';
-        if (account && responseAccount && responseAccount !== account) {return false;}
-        if (requestAccount && account && requestAccount !== account) {return false;}
-        if (!account && responseAccount) {account = responseAccount;}
-        const receivedAt = Date.now();
-        const windows = normalizeLimits(data.rate_limit, receivedAt);
-        if (!windows.session && !windows.week) {return false;}
-        usage = windows;
-        updatedAt = receivedAt;
-        notice = '';
+    function requestContext() {
+        return { id: ++requestSerial, generation, account, deadline: Date.now() + requestTimeout };
+    }
+
+    function isCurrent(context) {
+        return context.generation === generation && context.id > settledSerial
+            && (!context.account || !account || context.account === account);
+    }
+
+    function retryDelay(response, base = pollInterval) {
+        const delay = Math.min(base * (2 ** Math.min(failureCount++, 5)), 900000);
+        const retryAfter = response?.headers?.get('retry-after');
+        if (!retryAfter) {return delay;}
+        const seconds = Number(retryAfter);
+        const serverDelay = Number.isFinite(seconds) ? Math.max(0, seconds * 1000)
+            : Math.max(0, Date.parse(retryAfter) - Date.now());
+        return Math.max(delay, Number.isFinite(serverDelay) ? serverDelay : 0);
+    }
+
+    function failed(context, message, response) {
+        if (!isCurrent(context)) {return;}
+        settledSerial = context.id;
+        failureStatus = response?.status || 0;
+        notice = message;
+        nextPollAt = Date.now() + retryDelay(response);
         render();
-        return true;
+    }
+
+    function receive(data, context) {
+        if (!isCurrent(context)) {return;}
+        const responseAccount = typeof data.account_id === 'string' ? data.account_id : '';
+        if (account && responseAccount && responseAccount !== account) {
+            failed(context, 'Waiting for current account usage');
+            return;
+        }
+        if (!data.rate_limit || typeof data.rate_limit !== 'object' || Array.isArray(data.rate_limit)) {
+            failed(context, 'Usage format unavailable');
+            return;
+        }
+        const receivedAt = Date.now();
+        const { windows, issues } = normalizeLimits(data.rate_limit, receivedAt);
+        if (!account && responseAccount) {account = responseAccount;}
+        settledSerial = context.id;
+        usage = windows;
+        failureStatus = 0;
+        const resetTimes = Object.values(windows).map(value => value?.resetAt).filter(value => value !== null && value !== undefined);
+        const expired = resetTimes.some(value => value <= receivedAt);
+        if (issues.length || expired) {
+            notice = issues.length ? issues.join(' · ') : 'Reset pending refresh';
+            nextPollAt = receivedAt + retryDelay(null, expired && !issues.length ? 30000 : pollInterval);
+        } else {
+            failureCount = 0;
+            notice = Object.values(windows).some(Boolean) ? '' : 'No usage limits reported';
+            nextPollAt = Math.min(receivedAt + pollInterval, ...resetTimes);
+        }
+        render();
     }
 
     function observeRequest(input, init) {
@@ -161,9 +243,13 @@
             generation++;
             account = incomingAccount;
             usage = null;
-            updatedAt = 0;
+            settledSerial = 0;
+            failureCount = 0;
+            failureStatus = 0;
+            nextPollAt = 0;
             for (const name of copiedHeaders) {sessionHeaders.delete(name);}
-            activeController?.abort();
+            observedRequests.clear();
+            activeRequest?.controller.abort();
             notice = 'Connecting…';
             changed = true;
             render();
@@ -175,13 +261,31 @@
                 changed = true;
             }
         }
-        if (changed) {
-            headersRevision++;
-            window.setTimeout(() => {
-                if (host.isConnected && (!usage || Date.now() - lastAttempt > 30000)) {refresh();}
-            }, 0);
+        if (changed && (failureStatus === 401 || failureStatus === 403)) {
+            failureCount = 0;
+            failureStatus = 0;
+            nextPollAt = 0;
         }
-        return { isUsage: url.pathname === endpoint, account, generation };
+        const context = url.pathname === endpoint ? requestContext() : null;
+        if (context) {observedRequests.set(context.id, context);}
+        if (changed || context) {schedulePoll();}
+        return context;
+    }
+
+    async function consume(response, context) {
+        if (!isCurrent(context)) {return;}
+        if (!response.ok) {
+            failed(context, response.status === 401 || response.status === 403
+                ? 'Waiting for app sign-in' : `Usage unavailable (${response.status})`, response);
+            return;
+        }
+        try {
+            const data = await response.json();
+            if (!data || typeof data !== 'object') {throw new Error('Invalid usage');}
+            receive(data, context);
+        } catch {
+            failed(context, 'Usage format unavailable');
+        }
     }
 
     // Observe the app's own requests without changing their arguments or responses.
@@ -189,10 +293,15 @@
         let context = null;
         try { context = observeRequest(input, init); } catch { /* Preserve the original fetch behavior. */ }
         const responsePromise = originalFetch(input, init);
-        if (context?.isUsage) {
+        if (context) {
             responsePromise.then(response => {
-                if (response.ok) {return response.clone().json().then(data => receive(data, context.account, context.generation));}
-            }).catch(() => {});
+                return consume(response.clone(), context);
+            }).catch(() => {
+                failed(context, usage ? 'Refresh failed · last known usage' : 'Usage unavailable · retrying');
+            }).finally(() => {
+                observedRequests.delete(context.id);
+                schedulePoll();
+            });
         }
         return responsePromise;
     };
@@ -233,78 +342,109 @@
             <span class="status" role="status">Connecting…</span>
         </div>`;
     const status = shadow.querySelector('.status');
+    const gaugeNodes = Object.fromEntries(Object.keys(labels).map(key => {
+        const gauge = shadow.querySelector(`[data-window="${key}"]`);
+        return [key, {
+            gauge, value: gauge.querySelector('.value'), fill: gauge.querySelector('.fill'),
+            track: gauge.querySelector('.track'), name: gauge.querySelector('.name'), previous: {}
+        }];
+    }));
 
-    function render() {
-        const now = Date.now();
-        for (const key of ['session', 'week']) {
-            const gauge = shadow.querySelector(`[data-window="${key}"]`);
-            const windowData = usage?.[key];
-            gauge.hidden = !windowData;
-            const expired = windowData?.resetAt !== null && windowData?.resetAt <= now;
-            const known = Boolean(windowData) && !expired;
-            const remaining = known ? windowData.remaining : 0;
-            gauge.querySelector('.value').textContent = known ? `${Math.round(remaining)}%` : '—';
-            gauge.querySelector('.fill').style.width = `${remaining}%`;
-            gauge.querySelector('.fill').style.background = remaining <= 20 ? '#e05b55' : remaining <= 40 ? '#c99528' : '#10a37f';
-            const track = gauge.querySelector('.track');
-            if (known) {track.setAttribute('aria-valuenow', String(remaining));}
-            else {track.removeAttribute('aria-valuenow');}
-            const label = key === 'session' ? 'Session' : 'Weekly';
-            const countdown = known && windowData.resetAt ? duration(windowData.resetAt - now) : '';
-            gauge.querySelector('.name').textContent = countdown
-                ? `${label} · ${countdown}` : label;
-            gauge.title = known && windowData.resetAt
-                ? `Open usage dashboard. Resets ${new Date(windowData.resetAt).toLocaleString()}`
-                : usage && !windowData ? 'Open usage dashboard. Usage window not reported.' : 'Open usage dashboard';
-            gauge.setAttribute('aria-label', `${label} allowance: ${known ? `${Math.round(remaining)}% remaining.` : 'Not reported.'} Open usage dashboard.`);
-        }
-        const stale = Boolean(updatedAt) && now - updatedAt > 180000;
-        const expired = usage && Object.values(usage).some(w => w?.resetAt && w.resetAt <= now);
-        const visibleNotice = notice === 'Refreshing…' && usage ? '' : notice;
-        status.textContent = visibleNotice || (expired ? 'Reset pending refresh' : stale ? 'Stale usage' : updatedAt ? '' : 'Connecting…');
-        status.hidden = !status.textContent;
-        status.dataset.stale = String(Boolean(stale || expired));
+    function setText(node, value) {
+        if (node.textContent !== value) {node.textContent = value;}
     }
 
-    function refresh() {
-        if (pending || !host.isConnected) {return pending;}
-        lastAttempt = Date.now();
-        const requestGeneration = generation;
-        const requestHeadersRevision = headersRevision;
-        const requestAccount = account;
+    function render() {
+        if (!host.isConnected || document.visibilityState === 'hidden') {return;}
+        const now = Date.now();
+        for (const key of ['session', 'week']) {
+            const nodes = gaugeNodes[key];
+            const { gauge, previous } = nodes;
+            const windowData = usage?.[key];
+            const expired = windowData?.resetAt != null && windowData.resetAt <= now;
+            const known = typeof windowData?.remaining === 'number' && !expired;
+            const remaining = known ? windowData.remaining : 0;
+            const label = labels[key];
+            const countdown = known && windowData.resetAt ? duration(windowData.resetAt - now) : '';
+            const title = known && windowData.resetAt
+                ? `Open usage dashboard. Resets ${new Date(windowData.resetAt).toLocaleString()}`
+                : 'Open usage dashboard';
+            const hidden = !windowData;
+            if (hidden !== previous.hidden) {gauge.hidden = hidden;}
+            setText(nodes.value, known ? `${Math.round(remaining)}%` : '—');
+            setText(nodes.name, countdown ? `${label} · ${countdown}` : label);
+            if (remaining !== previous.remaining) {
+                nodes.fill.style.width = `${remaining}%`;
+                nodes.fill.style.background = remaining <= 20 ? '#e05b55' : remaining <= 40 ? '#c99528' : '#10a37f';
+            }
+            if (known !== previous.known || remaining !== previous.remaining) {
+                if (known) {nodes.track.setAttribute('aria-valuenow', String(remaining));}
+                else {nodes.track.removeAttribute('aria-valuenow');}
+                gauge.setAttribute('aria-label', `${label} allowance: ${known ? `${Math.round(remaining)}% remaining.` : 'Unavailable.'} Open usage dashboard.`);
+            }
+            if (title !== previous.title) {gauge.title = title;}
+            nodes.previous = { hidden, remaining, known, title };
+        }
+        const stale = usage && Object.values(usage).some(w => w?.receivedAt && now - w.receivedAt > 180000);
+        const expired = usage && Object.values(usage).some(w => w?.resetAt && w.resetAt <= now);
+        const visibleNotice = navigator.onLine === false ? (usage ? 'Offline · last known usage' : 'Offline') : notice;
+        setText(status, visibleNotice || (expired ? 'Reset pending refresh' : stale ? 'Stale usage' : usage ? '' : 'Connecting…'));
+        const hidden = !status.textContent;
+        if (status.hidden !== hidden) {status.hidden = hidden;}
+        const staleValue = String(Boolean(stale || expired));
+        if (status.dataset.stale !== staleValue) {status.dataset.stale = staleValue;}
+    }
+
+    function canPoll() {
+        return host.isConnected && document.visibilityState !== 'hidden' && navigator.onLine !== false
+            && activeEditor && isVisibleEditor(activeEditor);
+    }
+
+    function schedulePoll() {
+        window.clearTimeout(pollTimer);
+        pollTimer = null;
+        if (!canPoll() || activeRequest) {return;}
+        const now = Date.now();
+        let due = nextPollAt;
+        for (const [id, context] of observedRequests) {
+            if (context.generation !== generation || id <= settledSerial || context.deadline <= now) {
+                observedRequests.delete(id);
+            } else {
+                // Give the app's own usage request time to supply a fresh reading.
+                due = Math.max(due, context.deadline);
+            }
+        }
+        // Long server Retry-After dates must not overflow a browser's timer.
+        pollTimer = window.setTimeout(poll, Math.min(2147483647, Math.max(0, due - now)));
+    }
+
+    async function poll() {
+        pollTimer = null;
+        if (!canPoll() || activeRequest) {return;}
+        if (Date.now() < nextPollAt || Array.from(observedRequests.values()).some(context =>
+            context.generation === generation && context.id > settledSerial && context.deadline > Date.now())) {
+            schedulePoll();
+            return;
+        }
+        const context = requestContext();
         const controller = new AbortController();
-        activeController = controller;
-        const timeout = window.setTimeout(() => controller.abort(), 15000);
+        const request = { context, controller };
+        activeRequest = request;
+        const timeout = window.setTimeout(() => controller.abort(), requestTimeout);
         const headers = new Headers(sessionHeaders);
         headers.set('accept', 'application/json');
-        notice = 'Refreshing…';
-        render();
-        pending = (async () => {
-            try {
-                const response = await originalFetch(endpoint, {
-                    method: 'GET', credentials: 'same-origin', cache: 'no-store', headers, signal: controller.signal
-                });
-                if (!response.ok) {
-                    if (requestGeneration === generation) {notice = response.status === 401 || response.status === 403
-                        ? 'Waiting for app sign-in' : `Usage unavailable (${response.status})`;}
-                    return;
-                }
-                if (!receive(await response.json(), requestAccount, requestGeneration) && requestGeneration === generation) {
-                    notice = 'Usage format unavailable';
-                }
-            } catch {
-                if (requestGeneration === generation) {notice = usage ? 'Refresh failed · last known usage' : 'Usage unavailable · retrying';}
-            } finally {
-                window.clearTimeout(timeout);
-                if (activeController === controller) {activeController = null;}
-                pending = null;
-                render();
-                if ((requestGeneration !== generation || requestHeadersRevision !== headersRevision) && host.isConnected) {
-                    window.setTimeout(refresh, 0);
-                }
-            }
-        })();
-        return pending;
+        try {
+            const response = await originalFetch(endpoint, {
+                method: 'GET', credentials: 'same-origin', cache: 'no-store', headers, signal: controller.signal
+            });
+            await consume(response, context);
+        } catch {
+            failed(context, usage ? 'Refresh failed · last known usage' : 'Usage unavailable · retrying');
+        } finally {
+            window.clearTimeout(timeout);
+            if (activeRequest === request) {activeRequest = null;}
+            schedulePoll();
+        }
     }
 
     function isVisibleEditor(node) {
@@ -318,42 +458,77 @@
 
     function mount() {
         scheduleId = null;
-        const editor = Array.from(document.querySelectorAll(workSelector)).find(isVisibleEditor);
+        for (const editor of editors) {
+            if (!editor.isConnected || !editor.matches(workSelector)) {editors.delete(editor);}
+        }
+        const editor = editors.has(activeEditor) && isVisibleEditor(activeEditor)
+            ? activeEditor : Array.from(editors).find(isVisibleEditor);
         const form = editor?.closest('form');
-        if (!form || form.closest('[aria-hidden="true"]')) {
+        if (!form) {
+            activeEditor = null;
             if (host.isConnected) {host.remove();}
+            schedulePoll();
             return;
         }
-        const firstMount = !host.isConnected;
+        activeEditor = editor;
         if (host.parentNode !== form.parentNode || host.nextSibling !== form) {form.before(host);}
         render();
-        if (firstMount) {refresh();}
+        schedulePoll();
     }
 
     function scheduleMount() {
         if (scheduleId === null) {scheduleId = window.setTimeout(mount, 100);}
     }
-    new MutationObserver(scheduleMount).observe(document, {
-        childList: true, subtree: true, attributes: true, attributeFilter: ['aria-hidden', 'hidden', 'inert', 'style', 'class']
-    });
-    scheduleMount();
-    window.setInterval(() => {
-        render();
-        const expired = usage && Object.values(usage).some(w => w?.resetAt && w.resetAt <= Date.now());
-        if (expired && host.isConnected && document.visibilityState !== 'hidden' && Date.now() - expiryAttempt > 30000) {
-            expiryAttempt = Date.now();
-            refresh();
+    function discoverEditors(root) {
+        let changed = false;
+        const found = root.matches?.(workSelector) ? [root] : [];
+        found.push(...root.querySelectorAll(workSelector));
+        for (const editor of found) {
+            if (!editors.has(editor)) {editors.add(editor); changed = true;}
         }
-    }, 15000);
-    window.setInterval(() => {
-        if (host.isConnected && document.visibilityState !== 'hidden') {refresh();}
-    }, 60000);
+        return changed;
+    }
+
+    function containsEditor(node) {
+        return Array.from(editors).some(editor => node === editor || node.contains(editor));
+    }
+
+    new MutationObserver(records => {
+        let changed = false;
+        for (const record of records) {
+            if (record.type === 'attributes') {
+                if (containsEditor(record.target)) {changed = true;}
+                if (['contenteditable', 'data-thread-find-composer', 'data-composer-markdown'].includes(record.attributeName)) {
+                    if (discoverEditors(record.target)) {changed = true;}
+                }
+            } else {
+                for (const node of record.removedNodes) {
+                    if (node === host || (node.nodeType === 1 && (node.contains(host) || containsEditor(node)))) {changed = true;}
+                }
+                for (const node of record.addedNodes) {
+                    if (node.nodeType === 1 && node !== host && discoverEditors(node)) {changed = true;}
+                }
+                const form = activeEditor?.closest('form');
+                if (form && record.target === form.parentNode && host.nextSibling !== form) {changed = true;}
+            }
+        }
+        if (changed) {scheduleMount();}
+    }).observe(document, {
+        childList: true, subtree: true, attributes: true,
+        attributeFilter: ['aria-hidden', 'hidden', 'inert', 'style', 'class', 'contenteditable', 'data-thread-find-composer', 'data-composer-markdown']
+    });
+    discoverEditors(document);
+    scheduleMount();
+    window.setInterval(render, 15000);
     function refreshWhenVisible() {
         scheduleMount();
-        if (host.isConnected && document.visibilityState !== 'hidden' && Date.now() - lastAttempt > 15000) {refresh();}
+        render();
+        schedulePoll();
     }
     document.addEventListener('visibilitychange', refreshWhenVisible);
     window.addEventListener('focus', refreshWhenVisible);
+    window.addEventListener('online', refreshWhenVisible);
+    window.addEventListener('offline', refreshWhenVisible);
 })();
 
 // Make text links easier to recognize in rendered chat messages.
@@ -422,3 +597,4 @@
         installLinkStyles();
     }
 })();
+

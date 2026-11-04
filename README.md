@@ -2,21 +2,23 @@
 
 A standalone Tampermonkey userscript for ChatGPT, including Work mode.
 
-Current version: **1.1.17**.
+Current version: **1.1.18**.
 
 ## Features
 
 - **Enter** inserts a newline; **Ctrl+Enter** or **Cmd+Enter** sends.
-- **Shift+Enter** keeps its normal newline behavior.
+- **Shift+Enter** keeps its normal newline behavior. Keyboard handling is restricted to known chat composers; Ctrl/Cmd+Enter selects the local visible Send control and ignores held-key repeats.
 - Links in assistant and user messages have a permanent underline and a soft background derived from their current text color, with stronger hover and keyboard-focus effects. For Work links with colored inline mentions, the highlight is applied to the inner text element so it uses the visible accent color instead of the anchor's neutral color.
 - Citation links receive the same treatment while preserving their chip layout. Styles apply automatically to newly rendered messages and chat switches. File references rendered as ordinary message links are included; specialized file widgets are not yet verified.
 - Compact session and weekly allowance gauges next to Work-style composers.
-- Limits are identified by duration: five-hour Session and seven-day Weekly. Accounts reporting only a weekly limit show only Weekly; absent gauges are hidden.
+- Limits are identified by duration: five-hour Session and seven-day Weekly. Accounts reporting only a weekly limit show only Weekly; explicitly absent gauges are hidden. Unreadable or unsupported windows produce an unavailable status instead of silently disappearing.
 - Gauges follow the visible composer when switching chats, including when inactive chats remain mounted but hidden with CSS.
 - Each gauge fills across its entire frame according to the percentage remaining.
 - Reset countdowns appear in the headings, such as `Session · 2h 20m`.
 - The whole gauge opens the usage dashboard when clicked.
-- Usage refreshes automatically every minute while the tab is visible, and when returning to the tab.
+- One scheduler refreshes usage while a Work composer is visible and the browser is online. It reuses fresh app readings for up to a minute, refreshes at reset time, and fetches overdue data when returning to the tab.
+- Older responses cannot overwrite newer readings. Failed requests back off automatically and respect the server's `Retry-After` header.
+- Composer detection filters unrelated page changes; gauges update only when their displayed values change.
 - An opaque, theme-aware background keeps text behind the gauges from showing through.
 
 ## Installation
@@ -64,6 +66,9 @@ identifiers, and usage readings are not written to persistent storage or sent to
 another host. No account credentials are embedded in the repository.
 
 If a refresh fails, the script keeps the last known reading and displays a status.
+For a recognized window with unreadable data, it displays an em dash. Unknown
+window durations receive an explicit status; an existing gauge is kept visible
+as unavailable until a readable response or explicit absence is received.
 After a reset time passes, it waits for a fresh server response before displaying
 the new allowance. It does not assume that a reset means 100% remains.
 
@@ -76,11 +81,42 @@ than separate regular-chat model limits.
 
 ## Development
 
-Edit `chatgpt-better-ui.user.js`, then copy it into Tampermonkey and reload the page.
-The script has no external runtime dependencies. Its latest imported version was
-checked for JavaScript syntax and the ESLint `curly` and `no-loop-func` rules.
+The installed script has no external runtime dependencies or build step.
+Development checks use Node.js (24.15+ in the Node 24 line, or another version
+allowed by `package.json`) and jsdom. From the repository directory, run:
+
+```sh
+npm ci
+npm run check
+npm test
+```
+
+The regression suite executes the complete userscript against synthetic pages,
+mock responses, and a deterministic clock. It covers response ordering, account
+changes, Plus/Pro limits, invalid data, background/offline behavior, retries,
+composer replacement/visibility, unnecessary DOM work, keyboard targeting, and
+link selector coverage. It makes no real ChatGPT API requests and contains no
+captured account data. jsdom does not provide browser layout: visibility is
+modeled in the harness, so native editor behavior and appearance need the manual
+Firefox check below.
+
+After an edit, run the checks and increase `@version` before publishing. Install
+from the direct Raw link so automatic updates keep working. A manually edited
+Tampermonkey copy may require confirming an overwrite.
+
+### Firefox smoke check
+
+1. In regular chat and Work, verify Enter inserts a newline, Ctrl/Cmd+Enter sends,
+   and Shift+Enter and IME composition retain their normal behavior.
+2. Switch between several chats and the file viewer; confirm the gauges follow
+   the visible Work composer. Test returning to a previously opened chat.
+3. Check session/weekly or weekly-only readings against the usage dashboard.
+4. Hide the tab or go offline, then return/reconnect; confirm automatic recovery.
+5. Check ordinary links, user-message links, and citations in light/dark themes,
+   including hover and keyboard focus. Specialized file widgets remain unverified.
 
 The keyboard behavior was originally inspired by
 [namulab/enter-newline-for-ai](https://github.com/namulab/enter-newline-for-ai),
 whose Firefox release declares the MIT License. The Work integration and gauges
 were adapted for this project. See [LICENSE](./LICENSE).
+
