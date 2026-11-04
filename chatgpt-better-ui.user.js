@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         ChatGPT Enter Fix - Regular and Work
 // @namespace    local.chatgpt.enter-fix
-// @version      1.1.15
-// @description  Enter adds a newline; Ctrl+Enter sends. Includes live Work session and weekly usage gauges.
+// @version      1.1.16
+// @description  Enter adds a newline; Ctrl+Enter sends. Includes Work usage gauges and clearer chat links.
 // @match        https://chatgpt.com/*
 // @run-at       document-start
 // @grant        none
@@ -354,4 +354,59 @@
     }
     document.addEventListener('visibilitychange', refreshWhenVisible);
     window.addEventListener('focus', refreshWhenVisible);
+})();
+
+// Make text links easier to recognize in rendered chat messages.
+(() => {
+    'use strict';
+    if (location.hostname !== 'chatgpt.com') {return;}
+
+    function installLinkStyles() {
+        if (document.getElementById('tm-chat-message-link-styles')) {return;}
+        const roots = [
+            '[data-markdown-text-style="assistant-message"]',
+            '[data-markdown-text-tone="user-message"]',
+            '[data-message-author-role] .markdown',
+            '[data-message-author-role="user"] .whitespace-pre-wrap'
+        ];
+        const links = ':is(' + roots.join(',') + ') a[href]:not([role="button"])';
+        const style = document.createElement('style');
+        style.id = 'tm-chat-message-link-styles';
+        // currentColor follows the site's selected appearance, including green links.
+        // Keep citation dimensions and all native navigation/preview behavior.
+        style.textContent = `
+            ${links} {
+                text-decoration-line: underline !important;
+                text-decoration-style: solid !important;
+                text-decoration-thickness: 1.5px !important;
+                text-underline-offset: 3px !important;
+                background-color: color-mix(in srgb, currentColor 10%, transparent) !important;
+                border-radius: 4px;
+                box-decoration-break: clone;
+                -webkit-box-decoration-break: clone;
+            }
+            ${links}:not([data-testid="chatgpt-citation"]) {
+                padding: 1px 3px;
+            }
+            ${links}[data-testid="chatgpt-citation"] {
+                background-color: color-mix(in srgb, currentColor 14%, transparent) !important;
+            }
+            ${links}:hover {
+                background-color: color-mix(in srgb, currentColor 20%, transparent) !important;
+                text-decoration-thickness: 2px !important;
+            }
+            ${links}:focus-visible {
+                background-color: color-mix(in srgb, currentColor 20%, transparent) !important;
+                outline: 2px solid currentColor;
+                outline-offset: 2px;
+            }
+        `;
+        (document.head || document.documentElement).append(style);
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', installLinkStyles, { once: true });
+    } else {
+        installLinkStyles();
+    }
 })();
