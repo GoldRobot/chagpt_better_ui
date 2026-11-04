@@ -2,12 +2,14 @@
 
 A standalone Tampermonkey userscript for ChatGPT, including Work mode.
 
-Current version: **1.1.15**.
+Current version: **1.1.16**.
 
 ## Features
 
 - **Enter** inserts a newline; **Ctrl+Enter** or **Cmd+Enter** sends.
 - **Shift+Enter** keeps its normal newline behavior.
+- Links in assistant and user messages have a permanent underline and a soft background derived from their current text color, with stronger hover and keyboard-focus effects.
+- Citation links receive the same treatment while preserving their chip layout. Styles apply automatically to newly rendered messages and chat switches. File references rendered as ordinary message links are included; specialized file widgets are not yet verified.
 - Compact session and weekly allowance gauges next to Work-style composers.
 - Limits are identified by duration: five-hour Session and seven-day Weekly. Accounts reporting only a weekly limit show only Weekly; absent gauges are hidden.
 - Gauges follow the visible composer when switching chats, including when inactive chats remain mounted but hidden with CSS.
